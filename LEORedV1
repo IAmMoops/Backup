@@ -27,7 +27,7 @@ import java.util.Arrays;
 import java.util.List;
 
 @TeleOp
-public class LeoTurretTestRED extends LinearOpMode {
+public class LEORedV1 extends LinearOpMode {
     private Limelight3A limelight;
 
     private static final List<Integer> TARGET_TAG_IDS = Arrays.asList(
