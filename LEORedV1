@@ -1,0 +1,227 @@
+org.firstinspires.ftc.teamcode;
+
+import com.qualcomm.hardware.limelightvision.LLResult;
+import com.qualcomm.hardware.limelightvision.LLResultTypes;
+import com.qualcomm.hardware.limelightvision.Limelight3A;
+import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
+import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
+import com.qualcomm.robotcore.hardware.DcMotor;
+//import com.qualcomm.robotcore.hardware.DcMotorEx;
+import com.qualcomm.robotcore.hardware.DcMotorSimple;
+//import com.qualcomm.robotcore.hardware.IMU;
+import com.qualcomm.robotcore.hardware.Servo;
+import com.qualcomm.hardware.rev.RevHubOrientationOnRobot;
+
+import com.pedropathing.follower.Follower;
+import com.pedropathing.revhub.drivetrains.Mecanum;
+import com.pedropathing.revhub.drivetrains.MecanumConfig;
+import com.pedropathing.revhub.localizers.TwoWheelLocalizer;
+import com.pedropathing.revhub.localizers.TwoWheelConfig;
+import com.pedropathing.revhub.localizers.RevHubIMU;
+import com.pedropathing.algorithm.Foresight;
+import com.pedropathing.algorithm.ForesightConfig;
+import com.pedropathing.controllers.PIDController;
+import com.pedropathing.math.Pose;
+
+import java.util.Arrays;
+import java.util.List;
+
+@TeleOp
+public class LeoTurretTestRED extends LinearOpMode {
+    private Limelight3A limelight;
+
+    private static final List<Integer> TARGET_TAG_IDS = Arrays.asList(
+            30, 31, 32, 33,
+            34, 35, 36, 37
+    );
+
+    private static final double TURRET_GAIN = 0.005;
+
+    @Override
+    public void runOpMode() {
+
+        initLimelight();
+
+        MecanumConfig mecanumConfig = new MecanumConfig(c -> {
+            c.frontLeftName.set("LD");
+            c.frontRightName.set("RD");
+            c.backLeftName.set("LB");
+            c.backRightName.set("RB");
+            c.frontLeftDirection.set(DcMotorSimple.Direction.FORWARD);
+            c.frontRightDirection.set(DcMotorSimple.Direction.FORWARD);
+            c.backLeftDirection.set(DcMotorSimple.Direction.FORWARD);
+            c.backRightDirection.set(DcMotorSimple.Direction.FORWARD);
+        });
+
+        TwoWheelConfig localizerConfig = new TwoWheelConfig(c -> {
+            c.xPodName.set("LD");
+            c.yPodName.set("RD");
+            c.imuName.set("imu");
+            c.xPodOffset.set(0.0);
+            c.yPodOffset.set(0.0);
+            c.forwardTicksToInches.set(0.00296664);
+            c.strafeTicksToInches.set(0.00296664);
+            c.xPodDirection.set(1.0);
+            c.yPodDirection.set(1.0);
+            c.imu.set(new RevHubIMU(new RevHubOrientationOnRobot(
+                    RevHubOrientationOnRobot.LogoFacingDirection.UP,
+                    RevHubOrientationOnRobot.UsbFacingDirection.FORWARD
+            )));
+        });
+
+        ForesightConfig foresightConfig = new ForesightConfig(c -> {
+            c.headingFeedback.set(new PIDController(4.0, 0.0, 0.1));
+            c.headingStaticFF.set((target, error) -> 0.0);
+            c.forwardTranslational.set(new PIDController(6.0, 0.0, 0.2));
+            c.strafeTranslational.set(new PIDController(6.0, 0.0, 0.2));
+            c.brake.set(new PIDController(0.0, 0.0, 0.0));
+            c.coast.set(new PIDController(0.0, 0.0, 0.0));
+            c.holdPointTranslationalScaling.set(1.0);
+            c.holdPointHeadingScaling.set(1.0);
+            c.maxBrakingPower.set(1.0);
+            c.maxAccelerationConstraint.set(60.0);
+            c.maxVelocityConstraint.set(60.0);
+            c.maxDecelerationConstraint.set(60.0);
+            c.maxPathSpeed.set(1.0);
+            c.maxDecelerationScale.set(1.0);
+            c.brakeAggression.set(1.0);
+            c.coastDownToVelocity.set(0.0);
+            c.headingDeviationTolerance.set(0.1);
+            c.translationalDeviationTolerance.set(0.5);
+            c.brakeAtEnd.set(true);
+            c.pathSkip.set(false);
+            c.headingDriveRatio.set(1.0);
+            c.cosineScale.set(false);
+            c.maxAchievableForwardVelocity.set(100.0);
+            c.maxAchievableStrafeVelocity.set(100.0);
+            c.naturalForwardDeceleration.set(10.0);
+            c.naturalStrafeDeceleration.set(10.0);
+            c.minCorrectionDistance.set(0.5);
+            c.parametricTConstraint.set(0.0);
+            c.headingConstraint.set(0.0);
+            c.translationalConstraint.set(0.0);
+            c.velocityConstraint.set(0.0);
+            c.timeoutConstraint.set(0.0);
+        });
+
+        Mecanum mecanumDrivetrain = new Mecanum(hardwareMap, mecanumConfig);
+        TwoWheelLocalizer twoWheelLocalizer = new TwoWheelLocalizer(hardwareMap, localizerConfig);
+        Foresight foresightAlgorithm = new Foresight(foresightConfig);
+
+        Follower follower = new Follower(twoWheelLocalizer, mecanumDrivetrain, foresightAlgorithm);
+        follower.setPose(new Pose(0, 0, 0));
+
+        DcMotor intake = hardwareMap.get(DcMotor.class, "IN");
+        DcMotor turretMotor = hardwareMap.get(DcMotor.class, "turretMotor");
+        Servo turretServo = hardwareMap.get(Servo.class, "turretServo");
+
+        // brake behavior
+        mecanumDrivetrain.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        intake.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        turretMotor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+
+        boolean pressed = false;
+        double turretPosition = 0.5;
+        boolean intakeToggleActive = false;
+        boolean lastRightTriggerPressed = false;
+        boolean turretMotorActive = false;
+        boolean lastLeftTriggerPressed = false;
+
+        Pose targetPose;
+        boolean isAutomaticallyHolding = false;
+
+        waitForStart();
+
+        // Put run blocks here
+        while (opModeIsActive()) {
+            follower.update();
+
+            boolean targetFound = false;
+            double bearing = 0;
+            double minBearingMagnitude = Double.MAX_VALUE;
+
+            LLResult result = limelight.getLatestResult();
+            if (result != null && result.isValid()) {
+                List<LLResultTypes.FiducialResult> fiducialResults = result.getFiducialResults();
+                for (LLResultTypes.FiducialResult fr : fiducialResults) {
+                    if (TARGET_TAG_IDS.contains(fr.getFiducialId())) {
+                        targetFound = true;
+                        if (Math.abs(fr.getTargetXDegrees()) < minBearingMagnitude) {
+                            minBearingMagnitude = Math.abs(fr.getTargetXDegrees());
+                            bearing = fr.getTargetXDegrees();
+                        }
+                    }
+                }
+            }
+
+            if (targetFound) {
+                turretPosition += bearing * TURRET_GAIN;
+                if (turretPosition > 1.0) turretPosition = 1.0;
+                if (turretPosition < 0.0) turretPosition = 0.0;
+                turretServo.setPosition(turretPosition);
+            }
+
+            if (gamepad2.right_trigger_pressed && !lastRightTriggerPressed) {
+                intakeToggleActive = !intakeToggleActive;
+            }
+            lastRightTriggerPressed = gamepad2.right_trigger_pressed;
+
+            if (intakeToggleActive) {
+                intake.setPower(1.0);
+            } else {
+                intake.setPower(0.0);
+            }
+
+            if (gamepad2.left_trigger_pressed && !lastLeftTriggerPressed) {
+                turretMotorActive = !turretMotorActive;
+            }
+            lastLeftTriggerPressed = gamepad2.left_trigger_pressed;
+
+            if (turretMotorActive) {
+                turretMotor.setPower(1.0);
+            } else {
+                turretMotor.setPower(0.0);
+            }
+
+            if (gamepad1.dpad_down) {
+                pressed = true;
+            } else if (gamepad1.dpad_up) {
+                pressed = false;
+            }
+            double speedMultiplier = pressed ? 0.35 : 1.0;
+            double forwardPower = -gamepad1.left_stick_y;
+            double strafePower = -gamepad1.left_stick_x;
+            double turnPower = -gamepad1.right_stick_x;
+
+            if (Math.abs(forwardPower) > 0.05 || Math.abs(strafePower) > 0.05 || Math.abs(turnPower) > 0.05) {
+                follower.manual(forwardPower * speedMultiplier, strafePower * speedMultiplier, turnPower * speedMultiplier);
+                isAutomaticallyHolding = false;
+            } else {
+                if (!isAutomaticallyHolding) {
+                    targetPose = follower.pose();
+                    follower.hold(targetPose);
+                    isAutomaticallyHolding = true;
+                }
+            }
+
+            telemetry.addData("X", follower.pose().x());
+            telemetry.addData("Y", follower.pose().y());
+            telemetry.addData("Heading", follower.pose().heading());
+            telemetry.addData("Holding Active", isAutomaticallyHolding);
+            telemetry.addData("Turret Pos", turretPosition);
+            telemetry.addData("Tags found", targetFound);
+            telemetry.addData("Intake works", intakeToggleActive);
+            telemetry.addData("Turret works", turretMotorActive);
+            telemetry.update();
+
+        }
+
+        limelight.stop();
+    }
+
+    private void initLimelight() {
+        limelight = hardwareMap.get(Limelight3A.class, "limelight");
+        limelight.pipelineSwitch(0);
+        limelight.start();
+    }
+}
