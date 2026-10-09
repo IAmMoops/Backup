@@ -1,0 +1,410 @@
+package org.firstinspires.ftc.teamcode;
+
+import com.qualcomm.hardware.limelightvision.LLResult;
+import com.qualcomm.hardware.limelightvision.LLResultTypes;
+import com.qualcomm.hardware.limelightvision.Limelight3A;
+import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
+import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
+import com.qualcomm.robotcore.hardware.CRServo;
+import com.qualcomm.robotcore.hardware.DcMotor;
+import com.qualcomm.robotcore.hardware.DcMotorSimple;
+import com.qualcomm.robotcore.hardware.Servo;
+import com.qualcomm.robotcore.hardware.NormalizedColorSensor;
+import com.qualcomm.robotcore.hardware.NormalizedRGBA;
+import com.qualcomm.robotcore.util.Range;
+import android.graphics.Color;
+import com.pedropathing.follower.Follower;
+import com.pedropathing.revhub.drivetrains.Mecanum;
+import com.pedropathing.revhub.drivetrains.MecanumConfig;
+import com.pedropathing.revhub.localizers.PinpointLocalizer;
+import com.pedropathing.revhub.localizers.PinpointConfig;
+import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
+import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
+import com.pedropathing.algorithm.Foresight;
+import com.pedropathing.algorithm.ForesightConfig;
+import com.pedropathing.controllers.PIDController;
+import com.pedropathing.math.Pose;
+import com.pedropathing.math.Matrix;
+import com.pedropathing.math.Vector2D;
+import java.util.Arrays;
+import java.util.List;
+
+@TeleOp
+public class LEORedV6 extends LinearOpMode {
+    private Limelight3A limelight;
+
+    private static final List<Integer> TARGET_TAG_IDS = Arrays.asList(
+            21, 22, 23, 24
+    );
+
+    private static final double TURRET_GAIN = 0.042;
+    private static final double MIN_TURRET_POWER = 0.12;
+    private static final double BEARING_DEADZONE_DEGREES = 0.5;
+    private static final double AIM_SERVO_GAIN = 1.0 / 60.0;
+
+    @Override
+    public void runOpMode() {
+
+        initLimelight();
+
+        // pedropathing config
+        MecanumConfig mecanumConfig = new MecanumConfig(c -> {
+            c.frontLeftName.set("LD");
+            c.frontRightName.set("RD");
+            c.backLeftName.set("LB");
+            c.backRightName.set("RB");
+            c.frontLeftDirection.set(DcMotorSimple.Direction.FORWARD);
+            c.frontRightDirection.set(DcMotorSimple.Direction.REVERSE);
+            c.backLeftDirection.set(DcMotorSimple.Direction.FORWARD);
+            c.backRightDirection.set(DcMotorSimple.Direction.REVERSE);
+        });
+
+        PinpointConfig localizerConfig = new PinpointConfig(c -> {
+            c.name.set("pinpoint");
+            c.xPodOffset.set(0.0);
+            c.yPodOffset.set(0.0);
+            c.xPodDirection.set(GoBildaPinpointDriver.EncoderDirection.FORWARD);
+            c.yPodDirection.set(GoBildaPinpointDriver.EncoderDirection.FORWARD);
+            c.offsetUnits.set(DistanceUnit.CM);
+            c.globalDistanceUnit.set(DistanceUnit.CM);
+            c.encoderResolutionUnit.set(DistanceUnit.CM);
+            c.podType.set(GoBildaPinpointDriver.GoBildaOdometryPods.goBILDA_4_BAR_POD);
+            c.resetMode.set(PinpointLocalizer.ResetMode.RECALIBRATE_IMU);
+        });
+
+        ForesightConfig foresightConfig = new ForesightConfig(c -> {
+            c.headingFeedback.set(new PIDController(1.5, 0.0, 0.05));
+            c.headingStaticFF.set((target, error) -> 0.0);
+            c.forwardTranslational.set(new PIDController(0.1, 0.0, 0.01));
+            c.strafeTranslational.set(new PIDController(0.1, 0.0, 0.01));
+            c.brake.set(new PIDController(0.0, 0.0, 0.0));
+            c.coast.set(new PIDController(0.0, 0.0, 0.0));
+            c.holdPointTranslationalScaling.set(1.0);
+            c.holdPointHeadingScaling.set(1.0);
+            c.maxBrakingPower.set(1.0);
+            c.maxAccelerationConstraint.set(60.0);
+            c.maxVelocityConstraint.set(60.0);
+            c.maxDecelerationConstraint.set(60.0);
+            c.maxPathSpeed.set(1.0);
+            c.maxDecelerationScale.set(1.0);
+            c.brakeAggression.set(1.0);
+            c.coastDownToVelocity.set(0.1);
+            c.headingDeviationTolerance.set(0.1);
+            c.translationalDeviationTolerance.set(0.5);
+            c.brakeAtEnd.set(true);
+            c.pathSkip.set(false);
+            c.headingDriveRatio.set(1.0);
+            c.linearBrakeCoefficients.set(Matrix.zero(2));
+            c.quadraticBrakeCoefficients.set(Matrix.zero(2));
+            c.headingBrakeCoefficients.set(Vector2D.cartesian(0.0, 0.0));
+            c.cosineScale.set(false);
+            c.maxAchievableForwardVelocity.set(100.0);
+            c.maxAchievableStrafeVelocity.set(100.0);
+            c.naturalForwardDeceleration.set(10.0);
+            c.naturalStrafeDeceleration.set(10.0);
+            c.minCorrectionDistance.set(0.5);
+            c.parametricTConstraint.set(0.1);
+            c.headingConstraint.set(0.1);
+            c.translationalConstraint.set(0.1);
+            c.velocityConstraint.set(0.1);
+            c.timeoutConstraint.set(100.0);
+        });
+
+        Mecanum mecanumDrivetrain = new Mecanum(hardwareMap, mecanumConfig);
+        PinpointLocalizer pinpointLocalizer = new PinpointLocalizer(hardwareMap, localizerConfig);
+        Foresight foresightAlgorithm = new Foresight(foresightConfig);
+
+        Follower follower = new Follower(pinpointLocalizer, mecanumDrivetrain, foresightAlgorithm);
+        follower.setPose(new Pose(0, 0, 0));
+
+        DcMotor intake = hardwareMap.get(DcMotor.class, "IN");
+        DcMotor turretMotor = hardwareMap.get(DcMotor.class, "TM");
+        DcMotor transfer = hardwareMap.get(DcMotor.class, "TR");
+        CRServo turretServo = hardwareMap.get(CRServo.class, "TS");
+        turretServo.setPower(0.0);
+
+        // Sensors for intake and outtake ball tracking
+        NormalizedColorSensor intakeSensor;
+        try {
+            intakeSensor = hardwareMap.get(NormalizedColorSensor.class, "intakeSensor");
+        } catch (Exception e) {
+            intakeSensor = hardwareMap.get(NormalizedColorSensor.class, "colorSensor");
+        }
+
+        NormalizedColorSensor outtakeSensor;
+        try {
+            outtakeSensor = hardwareMap.get(NormalizedColorSensor.class, "outtakeSensor");
+        } catch (Exception e) {
+            outtakeSensor = null;
+        }
+
+        Servo colorServo = hardwareMap.get(Servo.class, "CS");
+        Servo aimServo = hardwareMap.get(Servo.class, "AS");
+
+        // brake behavior
+        mecanumDrivetrain.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        intake.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        turretMotor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        transfer.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+
+        boolean slowMode = false;
+        double turretPower;
+        boolean intakeToggleActive = false;
+        boolean intakeReverseToggleActive = false;
+        boolean lastRightTriggerPressed = false;
+        boolean lastRightBumperPressed = false;
+        boolean transferToggleActive = false;
+        boolean transferReverseToggleActive = false;
+        boolean lastAPressed = false;
+        boolean lastXPressed = false;
+        boolean turretMotorActive = false;
+        boolean lastLeftTriggerPressed = false;
+        int ballCount = 4;
+        boolean lastIntakeBallDetected = false;
+        boolean lastOuttakeBallDetected = false;
+
+        waitForStart();
+
+        // Put run blocks here
+        while (opModeIsActive()) {
+            follower.update();
+
+            boolean targetFound = false;
+            double bearing = 0;
+            double minBearingMagnitude = Double.MAX_VALUE;
+            boolean limelightConnected = false;
+            StringBuilder seenTagIds = new StringBuilder();
+
+            // limelight turret
+            if (limelight != null) {
+                limelightConnected = limelight.isConnected();
+                LLResult result = limelight.getLatestResult();
+                if (result != null && result.isValid()) {
+                    List<LLResultTypes.FiducialResult> fiducialResults = result.getFiducialResults();
+                    for (LLResultTypes.FiducialResult fr : fiducialResults) {
+                        seenTagIds.append(fr.getFiducialId()).append(" ");
+                        if (TARGET_TAG_IDS.contains(fr.getFiducialId())) {
+                            targetFound = true;
+                            if (Math.abs(fr.getTargetXDegrees()) < minBearingMagnitude) {
+                                minBearingMagnitude = Math.abs(fr.getTargetXDegrees());
+                                bearing = fr.getTargetXDegrees();
+                            }
+                        }
+                    }
+                }
+            }
+
+            double aimServoPosition;
+            if (gamepad2.dpad_left) {
+                turretPower = -0.5; // manual left rotation to find tag
+                turretServo.setPower(turretPower);
+                aimServoPosition = 0.5;
+            } else if (gamepad2.dpad_right) {
+                turretPower = 0.5;  // manual right rotation to find tag
+                turretServo.setPower(turretPower);
+                aimServoPosition = 0.5;
+            } else if (targetFound) {
+                if (Math.abs(bearing) > BEARING_DEADZONE_DEGREES) {
+                    turretPower = Math.signum(bearing) * MIN_TURRET_POWER + (bearing * TURRET_GAIN);
+                    turretPower = Range.clip(turretPower, -1.0, 1.0);
+                } else {
+                    turretPower = 0.0;
+                }
+                turretServo.setPower(turretPower);
+                aimServoPosition = Range.clip(0.5 + (bearing * AIM_SERVO_GAIN), 0.0, 1.0);
+            } else {
+                turretPower = 0.0;
+                turretServo.setPower(0.0);
+                aimServoPosition = 0.5;
+            }
+            aimServo.setPosition(aimServoPosition);
+            
+            boolean intakeBallDetected = false;
+            boolean isRedDetected = false;
+            String detectedColor = "None";
+            double colorServoPosition = 0.5;
+
+            if (intakeSensor != null) {
+                NormalizedRGBA intakeColors = intakeSensor.getNormalizedColors();
+                float[] hsv = new float[3];
+                Color.colorToHSV(intakeColors.toColor(), hsv);
+                float hue = hsv[0];
+
+                if (intakeColors.alpha >= 0.02) {
+                    intakeBallDetected = true;
+                    if (hue >= 340 || hue <= 30) {
+                        detectedColor = "Red";
+                        isRedDetected = true;
+                        colorServoPosition = 1.0; // red
+                    } else if (hue >= 40 && hue <= 90) {
+                        detectedColor = "Yellow";
+                        colorServoPosition = 0.75; // yellow
+                    } else {
+                        detectedColor = "Unknown"; // unknown
+                    }
+                } else {
+                    detectedColor = "None";
+                }
+            }
+
+            colorServo.setPosition(colorServoPosition);
+            
+            if (intakeBallDetected && !lastIntakeBallDetected) {
+                ballCount++;
+            }
+            lastIntakeBallDetected = intakeBallDetected;
+            
+            boolean outtakeBallDetected = false;
+            if (outtakeSensor != null) {
+                NormalizedRGBA outtakeColors = outtakeSensor.getNormalizedColors();
+                if (outtakeColors.alpha >= 0.02) {
+                    outtakeBallDetected = true;
+                }
+            }
+            
+            if (outtakeBallDetected && !lastOuttakeBallDetected) {
+                ballCount--;
+                if (ballCount < 0) {
+                    ballCount = 0;
+                }
+            }
+            lastOuttakeBallDetected = outtakeBallDetected;
+            
+            boolean intakeShouldTurnOff = (ballCount >= 4) || isRedDetected;
+            if (intakeShouldTurnOff) {
+                intakeToggleActive = false;
+            }
+
+            // intake toggle
+            boolean rightTriggerPressed = gamepad2.right_trigger > 0.5;
+            if (rightTriggerPressed && !lastRightTriggerPressed) {
+                if (!intakeToggleActive) {
+                    if (!intakeShouldTurnOff) {
+                        intakeToggleActive = true;
+                        intakeReverseToggleActive = false;
+                    }
+                } else {
+                    intakeToggleActive = false;
+                }
+            }
+            lastRightTriggerPressed = rightTriggerPressed;
+            // intake reverse toggle
+            boolean rightBumperPressed = gamepad2.right_bumper;
+            if (rightBumperPressed && !lastRightBumperPressed) {
+                if (!intakeReverseToggleActive) {
+                    intakeReverseToggleActive = true;
+                    intakeToggleActive = false;
+                } else {
+                    intakeReverseToggleActive = false;
+                }
+            }
+            lastRightBumperPressed = rightBumperPressed;
+
+            if (intakeToggleActive) {
+                intake.setPower(-1.0);
+            } else if (intakeReverseToggleActive) {
+                intake.setPower(1.0);
+            } else {
+                intake.setPower(0.0);
+            }
+            // transfer toggle and reverse toggle
+            boolean APressed = gamepad2.a;
+            if (APressed && !lastAPressed) {
+                if (!transferToggleActive) {
+                    transferToggleActive = true;
+                    transferReverseToggleActive = false;
+                } else {
+                    transferToggleActive = false;
+                }
+            }
+            lastAPressed = APressed;
+
+            boolean XPressed = gamepad2.x;
+            if (XPressed && !lastXPressed) {
+                if (!transferReverseToggleActive) {
+                    transferReverseToggleActive = true;
+                    transferToggleActive = false;
+                } else {
+                    transferReverseToggleActive = false;
+                }
+            }
+            lastXPressed = XPressed;
+
+            if (transferToggleActive) {
+                transfer.setPower(1.0);
+            } else if (transferReverseToggleActive) {
+                transfer.setPower(-1.0);
+            } else {
+                transfer.setPower(0.0);
+            }
+            // turret toggle
+            boolean leftTriggerPressed = gamepad2.left_trigger > 0.5;
+            if (leftTriggerPressed && !lastLeftTriggerPressed) {
+                turretMotorActive = !turretMotorActive;
+            }
+            lastLeftTriggerPressed = leftTriggerPressed;
+
+            if (turretMotorActive) {
+                turretMotor.setPower(0.5);
+            } else {
+                turretMotor.setPower(0.0);
+            }
+            // emergency stop
+            if (gamepad2.b) {
+                intakeToggleActive = false;
+                intakeReverseToggleActive = false;
+                lastRightTriggerPressed = false;
+                lastRightBumperPressed = false;
+                transferToggleActive = false;
+                transferReverseToggleActive = false;
+                lastAPressed = false;
+                lastXPressed = false;
+                turretMotorActive = false;
+                lastLeftTriggerPressed = false;
+
+            }
+            if (gamepad1.dpad_up) {
+                slowMode = true;
+            } else if (gamepad1.dpad_down) {
+                slowMode = false;
+            }
+            double speedMultiplier = slowMode ? 0.35 : 1.0;
+            double forwardPower = -gamepad1.left_stick_y;
+            double strafePower = -gamepad1.left_stick_x;
+            double turnPower = -gamepad1.right_stick_x;
+
+            if (Math.abs(forwardPower) < 0.05) forwardPower = 0.0;
+            if (Math.abs(strafePower) < 0.05) strafePower = 0.0;
+            if (Math.abs(turnPower) < 0.05) turnPower = 0.0;
+
+            follower.manual(forwardPower * speedMultiplier, strafePower * speedMultiplier, turnPower * speedMultiplier);
+
+            telemetry.addData("X", follower.pose().x());
+            telemetry.addData("Y", follower.pose().y());
+            telemetry.addData("Limelight Connected?", limelightConnected);
+            telemetry.addData("Turret Power", turretPower);
+            telemetry.addData("Aim Servo", aimServoPosition);
+            telemetry.addData("Target Found?", targetFound);
+            telemetry.addData("Ball Count", ballCount);
+            telemetry.addData("Intake Ball Detected", intakeBallDetected);
+            telemetry.addData("Outtake Ball Detected", outtakeBallDetected);
+            telemetry.addData("Red Detected", isRedDetected);
+            telemetry.addData("Intake", intakeToggleActive);
+            telemetry.addData("Transfer", transferToggleActive);
+            telemetry.addData("Turret", turretMotorActive);
+            telemetry.addData("Detected Color", detectedColor);
+            telemetry.addData("Color Servo Pos", colorServoPosition);
+            telemetry.addData("Slowed?", speedMultiplier);
+            telemetry.update();
+
+        }
+
+        limelight.stop();
+    }
+
+    private void initLimelight() {
+        limelight = hardwareMap.get(Limelight3A.class, "limelight");
+        limelight.pipelineSwitch(0);
+        limelight.start();
+    }
+}
